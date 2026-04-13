@@ -14,6 +14,7 @@ if "OPENAI_LOGDIR" not in os.environ:
 import numpy as np
 import torch as th
 import torch.distributed as dist
+from pathlib import Path
 
 from improved_diffusion import dist_util, logger
 from improved_diffusion.script_util import (
@@ -23,6 +24,7 @@ from improved_diffusion.script_util import (
     add_dict_to_argparser,
     args_to_dict,
 )
+from improved_diffusion.dataset import get_dataloader
 
 
 def main():
@@ -41,6 +43,14 @@ def main():
     model.to(dist_util.dev())
     model.eval()
 
+    logger.log("creating data loader...")
+    num_images = 4000
+    root_folder_data = Path('../datasets/PPD/train')
+    folder_Mo='MAP_with_start_end'
+    folder_P='PATH_20PIXEL'
+    os.makedirs('../work_dirs', exist_ok=True)
+    dataloader, dataloader_P, dataloader_Mo = get_dataloader(root_folder_data, folder_Mo, folder_P, num_images, args.batch_size, args.image_size)
+
     logger.log("sampling...")
     all_images = []
     all_labels = []
@@ -56,7 +66,8 @@ def main():
         )
         sample = sample_fn(
             model,
-            (args.batch_size, 3, args.image_size, args.image_size),
+            dataloader_Mo,
+            (args.batch_size, 1, args.image_size, args.image_size),
             clip_denoised=args.clip_denoised,
             model_kwargs=model_kwargs,
         )
@@ -94,18 +105,22 @@ def main():
 
 
 def create_argparser():
-    defaults = dict(
+    defaults = model_and_diffusion_defaults()
+    
+    my_config = dict(
         clip_denoised=True,
-        num_samples=10,
+        num_samples=16,
         batch_size=16,
         use_ddim=True,
-        model_path="../my_model_checkpoints/run-2026-04-13-10-28-15/model000100.pt",
+        timestep_respacing="ddim20",
+        model_path="../my_model_checkpoints/run-2026-04-13-21-37-11/model000100.pt",
     )
-    defaults.update(model_and_diffusion_defaults())
+    
+    defaults.update(my_config)
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
-    return parser
 
+    return parser
 
 if __name__ == "__main__":
     main()
