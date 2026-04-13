@@ -73,7 +73,7 @@ def get_dataloader(root_folder_data, folder_Mo, folder_P, num_images, batch_size
     # 初始化 DataLoader
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     dataloader_P  = DataLoader(dataset, batch_size=5, shuffle=True, num_workers=4)
-    dataloader_Mo = DataLoader(dataset, batch_size=25, shuffle=True, num_workers=4)
+    dataloader_Mo = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     return dataloader, dataloader_P, dataloader_Mo
 
