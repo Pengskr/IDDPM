@@ -1,5 +1,7 @@
 .DS_Store
+.vscode
 __pycache__/
 datasets/cifar_train/
 datasets/cifar_test/
 DiffRP_IDDPM.egg-info/
+my_model_checkpoints/

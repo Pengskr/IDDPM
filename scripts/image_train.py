@@ -1,6 +1,12 @@
 """
 Train a diffusion model on images.
 """
+import os
+import datetime
+# 设置 保存模型和日志地址 的环境变量
+if "OPENAI_LOGDIR" not in os.environ:
+    subdir = datetime.datetime.now().strftime("run-%Y-%m-%d-%H-%M-%S")
+    os.environ["OPENAI_LOGDIR"] = os.path.join(os.path.expanduser("~/DiffRP_IDDPM/my_model_checkpoints"), subdir)
 
 import argparse
 
@@ -64,7 +70,7 @@ def create_argparser():
         lr=1e-4,
         weight_decay=0.0,
         lr_anneal_steps=100,
-        batch_size=32,
+        batch_size=16,
         microbatch=-1,                  # -1 disables microbatches
         ema_rate="0.9999",              # comma-separated list of EMA values
         log_interval=10,

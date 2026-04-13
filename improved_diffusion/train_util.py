@@ -272,7 +272,7 @@ class TrainLoop:
         def save_checkpoint(rate, params):
             state_dict = self._master_params_to_state_dict(params)
             if dist.get_rank() == 0:
-                logger.log(f"saving model {rate}...")
+                logger.log(f"saving model {rate}")
                 if not rate:
                     filename = f"model{(self.step+self.resume_step):06d}.pt"
                 else:
