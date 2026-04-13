@@ -168,7 +168,7 @@ class TrainLoop:
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()                                        # 将训练损失（Loss）、学习率、显存占用等数据写入控制台或磁盘文件（如 CSV 或 TensorBoard）。
             if self.step % self.save_interval == 0:
-                self.save()                                             # 每隔 save_interval 步，保存模型检查点。
+                # self.save()                                             # 每隔 save_interval 步，保存模型检查点。
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
@@ -281,15 +281,15 @@ class TrainLoop:
                     th.save(state_dict, f)
 
         save_checkpoint(0, self.master_params)
-        for rate, params in zip(self.ema_rate, self.ema_params):
-            save_checkpoint(rate, params)
+        # for rate, params in zip(self.ema_rate, self.ema_params):
+        #     save_checkpoint(rate, params)
 
-        if dist.get_rank() == 0:
-            with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):06d}.pt"),
-                "wb",
-            ) as f:
-                th.save(self.opt.state_dict(), f)
+        # if dist.get_rank() == 0:
+        #     with bf.BlobFile(
+        #         bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):06d}.pt"),
+        #         "wb",
+        #     ) as f:
+        #         th.save(self.opt.state_dict(), f)
 
         dist.barrier()
 

@@ -3,12 +3,12 @@ Train a diffusion model on images.
 """
 import os
 import datetime
+import argparse
+
 # 设置 保存模型和日志地址 的环境变量
 if "OPENAI_LOGDIR" not in os.environ:
     subdir = datetime.datetime.now().strftime("run-%Y-%m-%d-%H-%M-%S")
     os.environ["OPENAI_LOGDIR"] = os.path.join(os.path.expanduser("~/DiffRP_IDDPM/my_model_checkpoints"), subdir)
-
-import argparse
 
 from improved_diffusion import dist_util, logger
 from improved_diffusion.image_datasets import load_data
