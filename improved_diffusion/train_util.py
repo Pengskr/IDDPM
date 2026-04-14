@@ -67,7 +67,7 @@ class TrainLoop:
         self.lr_anneal_steps = lr_anneal_steps
 
         self.step = 0
-        self.resume_step = 0
+        self.resume_step = 0    # 断点续传步数
         self.global_batch = self.batch_size * dist.get_world_size()
 
         self.model_params = list(self.model.parameters())
@@ -75,7 +75,7 @@ class TrainLoop:
         self.lg_loss_scale = INITIAL_LOG_LOSS_SCALE
         self.sync_cuda = th.cuda.is_available()
 
-        self._load_and_sync_parameters()
+        self._load_and_sync_parameters()    # 获取续训信息：网络参数 以及 resume_step
         if self.use_fp16:
             self._setup_fp16()
 
@@ -161,7 +161,7 @@ class TrainLoop:
     def run_loop(self):
         while (
             not self.lr_anneal_steps                                    # 无限模式：如果 lr_anneal_steps 设为 0（默认通常如此），循环将永远运行下去，直到你手动停止。
-            or self.step + self.resume_step < self.lr_anneal_steps      # 有限模式：如果你设定了具体lr_anneal_steps（例如 500,000 步），它会计算 当前步数 + 续训步数 是否达到了目标。这对于实施**学习率退火（Learning Rate Annealing）**非常重要，即在达到特定步数后停止训练。
+            or self.step + self.resume_step < self.lr_anneal_steps      # 有限模式：如果你设定了具体lr_anneal_steps（例如 500,000 步），它会计算 当前步数 + 已训步数 是否达到了目标。
         ):
             M_o, P_i, cond = next(self.data)                            # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）。
             self.run_step(M_o, P_i, cond)                               # 执行一个训练步骤，包括前向传播、反向传播和优化器更新
@@ -251,6 +251,9 @@ class TrainLoop:
             update_ema(params, self.master_params, rate=rate)
 
     def _log_grad_norm(self):
+        '''
+        计算模型所有参数梯度的 L2 范数，用于监控训练稳定性（如果该值过大，可能发生梯度爆炸）
+        '''
         sqsum = 0.0
         for p in self.master_params:
             sqsum += (p.grad ** 2).sum().item()
@@ -276,7 +279,8 @@ class TrainLoop:
             if dist.get_rank() == 0:
                 logger.log(f"saving model {rate}")
                 if not rate:
-                    filename = f"model{(self.step+self.resume_step):06d}.pt"
+                    # filename = f"model{(self.step+self.resume_step):06d}.pt"
+                    filename = f"model.pt"
                 else:
                     filename = f"ema_{rate}_{(self.step+self.resume_step):06d}.pt"
                 with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
@@ -350,6 +354,19 @@ def find_ema_checkpoint(main_checkpoint, step, rate):
 
 
 def log_loss_dict(diffusion, ts, losses):
+    '''
+    将整个扩散过程的 $T$ 个时间步平均分为 4 个区间（Quartiles），分别统计每个区间内的平均损失。
+    q0: $t \in [0, 0.25T)$（接近原始图像，去噪最容易）
+    q1: $t \in [0.25T, 0.5T)$
+    q2: $t \in [0.5T, 0.75T)$
+    q3: $t \in [0.75T, T]$（接近纯噪声，去噪最难）
+
+    q0 (低噪声区间，$t$ 接近 0)：这个阶段图像几乎是清晰的。虽然直觉上觉得容易，但由于模型预测的是噪声 $\epsilon$，在 $t$ 非常小时，信噪比（SNR）极高，微小的预测偏差在数值上可能会体现为较大的 MSE 损失。
+    q3 (高噪声区间，$t$ 接近 $T$)：这个阶段图像几乎是纯噪声。模型此时的任务是从纯噪声中预测结构，虽然任务很难，但在训练后期，模型对于预测“噪声中的噪声”往往能达到一个相对稳定的平均损失水平。
+
+    如果某个区间 Loss 远高于其他区间：说明模型在那个特定的噪声强度下还没学好。例如，如果 loss_q0 持续极高，可能意味着模型无法恢复清晰的细节。
+    如果四个区间 Loss 非常接近：通常意味着您的噪声调度器设置得比较科学（如使用了余弦调度），模型在各阶段都在均衡地学习。
+    '''
     for key, values in losses.items():
         logger.logkv_mean(key, values.mean().item())
         # Log the quantiles (four quartiles, in particular).
