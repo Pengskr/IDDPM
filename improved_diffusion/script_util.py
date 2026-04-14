@@ -16,15 +16,15 @@ def model_and_diffusion_defaults():
         image_size=64,
         num_channels=64,                # 模型每一层的基础通道数，乘以 channel_mult 后得到每一层的实际通道数，增加 num_channels 可以提升模型的表达能力，但也会增加计算资源的需求
         num_res_blocks=2,
-        num_heads=4,                    # 控制多头注意力机制中头的数量，增加头的数量可以让模型在不同的子空间中学习不同的特征表示，从而提升模型的表达能力和性能
+        num_heads=2,                    # 控制多头注意力机制中头的数量，增加头的数量可以让模型在不同的子空间中学习不同的特征表示，从而提升模型的表达能力和性能
         num_heads_upsample=-1,
-        attention_resolutions="16,8",   # 控制在哪些分辨率（如 16x16, 8x8）下开启注意力
+        attention_resolutions="8, 4",   # 控制在哪些分辨率（如 16x16, 8x8）下开启注意力
         dropout=0.0,                    # dropout 率，增加 dropout 可以帮助模型防止过拟合，但过高的 dropout 率可能会导致模型欠拟合
         learn_sigma=False,
         sigma_small=False,
         class_cond=False,
         diffusion_steps=1000,           # 扩散过程的总步数
-        noise_schedule="linear",
+        noise_schedule="cosine",
         timestep_respacing="",
         use_kl=False,
         predict_xstart=False,           # 控制模型的输出目标，如果 predict_xstart 为 False，则模型预测噪声 epsilon；如果 predict_xstart 为 True，则模型直接预测原始图像 x_0，这两种方式在训练和采样过程中会有不同的表现和效果
@@ -97,13 +97,13 @@ def create_model(
     dropout,
 ):
     if image_size == 256:
-        channel_mult = (1, 1, 2, 2, 4, 4)
+        channel_mult = (1, 1, 2, 2, 4, 4)   # 中间层分辨率为 8x8
     elif image_size == 128:
-        channel_mult = (1, 2, 3, 4, 4)
+        channel_mult = (1, 2, 3, 4, 4)      # 中间层分辨率为 8x8
     elif image_size == 64:
-        channel_mult = (1, 2, 3, 4)
+        channel_mult = (1, 2, 3, 4)         # 中间层分辨率为 8x8
     elif image_size == 32:
-        channel_mult = (1, 2, 2, 2)
+        channel_mult = (1, 2, 2, 2)         # 中间层分辨率为 4x4
     else:
         raise ValueError(f"unsupported image size: {image_size}")
 
@@ -118,7 +118,7 @@ def create_model(
         num_res_blocks=num_res_blocks,                          # nr：每个分辨率下的残差块数量  
         attention_resolutions=tuple(attention_ds),
         dropout=dropout,
-        channel_mult=channel_mult,
+        channel_mult=channel_mult,                              # 控制了不同层编码器和解码器的channel数：当前层通道数 = model_channels * mult
         num_classes=(NUM_CLASSES if class_cond else None),
         use_checkpoint=use_checkpoint,
         num_heads=num_heads,
