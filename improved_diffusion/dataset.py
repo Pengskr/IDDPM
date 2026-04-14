@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import matplotlib.pyplot as plt
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose, ToTensor, Resize
@@ -54,19 +55,10 @@ def get_dataloader(root_folder_data, folder_Mo, folder_P, num_images, batch_size
     )
     if len(dataset) > 0:
         random_idx = np.random.randint(len(dataset))
-        sample_a, sample_b, _ = dataset[random_idx]
+        sample_a, _, _ = dataset[random_idx]
 
         img_shape = sample_a.shape
-        print(f"成功加载 {len(dataset)} 对图片，当前随机展示第 {random_idx} 对")
-        print(f"单张图片张量尺寸 (C, H, W): {img_shape}")
-        # 归一化回 0-255
-        a_np = ((sample_a.squeeze().cpu().numpy() + 1) / 2 * 255).astype(np.uint8)
-        b_np = ((sample_b.squeeze().cpu().numpy() + 1) / 2 * 255).astype(np.uint8)
-
-        # 拼成一张横着的图
-        combined = np.hstack([a_np, b_np])
-        Image.fromarray(combined).save('../work_dirs/debug_view.png')
-        print("训练数据示意图片 debug_view.png 已保存。")
+        print(f"成功加载 {len(dataset)} 对图片,单张图片张量尺寸 (C, H, W): {img_shape}")
     else:
         print("警告：数据集为空，请检查路径！")
     
@@ -80,3 +72,40 @@ def get_dataloader(root_folder_data, folder_Mo, folder_P, num_images, batch_size
 def yield_dataloader(loader):
     while True:
         yield from loader
+
+def show_dataloader(dataloader):
+    sample_a, sample_b, _ = next(iter(dataloader))
+    # 1. 提取第 1 对图像 (index 0)
+    # 假设 sample_a 是 [batch_size, channels, height, width]
+    img_a = sample_a[0].detach().cpu()
+    img_b = sample_b[0].detach().cpu()
+
+    # 2. 归一化并转换维度
+    # 如果是单通道(灰度图)，squeeze 会去掉 C；如果是多通道，需要 transpose(1, 2, 0)
+    def process_for_plot(tensor):
+        # 归一化到 0-1 范围 (Matplotlib 对 float 类型的 0-1 支持更好)
+        img = (tensor + 1) / 2
+        img = img.clamp(0, 1).numpy()
+        
+        if img.shape[0] == 1: # 灰度图
+            return img.squeeze(), 'gray'
+        else: # RGB 
+            return img.transpose(1, 2, 0), None
+
+    data_a, cmap_a = process_for_plot(img_a)
+    data_b, cmap_b = process_for_plot(img_b)
+
+    # 3. 绘图
+    plt.figure(figsize=(6, 3))
+
+    plt.subplot(1, 2, 1)
+    plt.imshow(data_a, cmap=cmap_a)
+    plt.title("MAP")
+    plt.axis('off')
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(data_b, cmap=cmap_b)
+    plt.title("PATH")
+    plt.axis('off')
+
+    plt.show()
