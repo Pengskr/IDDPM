@@ -7,7 +7,7 @@ from torchvision.transforms import Compose, ToTensor, Resize
 from torch.utils.data import DataLoader
 
 class PairedImageDataset(Dataset):
-    def __init__(self, root_dir, folder_a, folder_b, num_images, transform=None, threshold=0.9):
+    def __init__(self, root_dir, folder_a, folder_b, num_images, transform=None, threshold=0.99):
         self.dir_a = root_dir / folder_a
         self.dir_b = root_dir / folder_b
         self.transform = transform
@@ -22,7 +22,7 @@ class PairedImageDataset(Dataset):
         img_name = f"{idx}{self.extension}"
         path_a = os.path.join(self.dir_a, img_name)
         path_b = os.path.join(self.dir_b, img_name)
-
+        
         # 加载图片
         # .convert('RGB') 确保加载为3通道，如果是灰度图可改为 .convert('L')
         img_a = Image.open(path_a).convert('L')     # 0 是纯黑，255 是纯白
@@ -30,7 +30,7 @@ class PairedImageDataset(Dataset):
 
         # 应用预处理（如有）
         if self.transform:
-            img_a = self.transform(img_a)
+            img_a = self.transform(img_a)   # ToTensor()会将L模式的PIL Image归一化
             img_b = self.transform(img_b)
         
         img_a = (img_a > self.threshold).float() * 2 - 1
@@ -64,10 +64,8 @@ def get_dataloader(root_folder_data, folder_Mo, folder_P, num_images, batch_size
     
     # 初始化 DataLoader
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    dataloader_P  = DataLoader(dataset, batch_size=5, shuffle=True, num_workers=4)
-    dataloader_Mo = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
-    return dataloader, dataloader_P, dataloader_Mo
+    return dataloader
 
 def yield_dataloader(loader):
     while True:
