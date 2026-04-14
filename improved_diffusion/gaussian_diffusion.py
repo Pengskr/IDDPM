@@ -13,6 +13,7 @@ import cv2
 
 import numpy as np
 import torch as th
+import matplotlib.pyplot as plt
 
 from .nn import mean_flat
 from .losses import normal_kl, discretized_gaussian_log_likelihood
@@ -569,7 +570,7 @@ class GaussianDiffusion:
     def ddim_sample_loop(
         self,
         model,
-        dataloader_Mo,
+        M_o,
         shape,
         noise=None,
         clip_denoised=True,
@@ -587,7 +588,7 @@ class GaussianDiffusion:
         final = None
         for sample in self.ddim_sample_loop_progressive(
             model,
-            dataloader_Mo,
+            M_o,
             shape,
             noise=noise,
             clip_denoised=clip_denoised,
@@ -603,7 +604,7 @@ class GaussianDiffusion:
     def ddim_sample_loop_progressive(
         self,
         model,
-        dataloader_Mo,
+        M_o,
         shape,
         noise=None,
         clip_denoised=True,
@@ -634,7 +635,6 @@ class GaussianDiffusion:
 
             indices = tqdm(indices)
 
-        M_o, _, _ = next(iter(dataloader_Mo))
         M_o = M_o.to(next(model.parameters()).device)
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
@@ -837,7 +837,7 @@ class GaussianDiffusion:
             "mse": mse,
         }
     
-    def visualize_forward(self, dataloader_P, save_path, device, n_steps, noise=None):
+    def extract_forward(self, dataloader_P, device, n_steps, noise=None):
         device = device
         M_o, P_i, _ = next(iter(dataloader_P))
         P_i = P_i.to(device)
@@ -853,13 +853,21 @@ class GaussianDiffusion:
             P_i_t = self.q_sample(M_o, P_i, t, noise=noise)    # 前向过程：x_t = sqrt(alpha_bar_t) * x_start + M_o * sqrt(1-alpha_bar_t) + sqrt(1-alpha_bar_t) * noise
             P_i_ts.append(P_i_t)
         res = torch.stack(P_i_ts, 0)
-        res = einops.rearrange(res, 'n1 n2 c h w -> (n2 h) (n1 w) c')
+        res = einops.rearrange(res, 'n1 n2 c h w -> (n2 h) (n1 w) c')   # 转为cv2支持的 BGR 格式
         res = (res.clip(-1, 1) + 1) / 2 * 255
         res = res.cpu().numpy().astype(np.uint8)
 
-        cv2.imwrite(save_path, res)
+        # 如果 res 是 BGR 格式 (OpenCV 默认)，需要转为 RGB 才能正常显示颜色
+        # 如果 res 只有 1 个通道 (灰度图)，则不需要这一步
+        if len(res.shape) == 3 and res.shape[2] == 3:
+            res_rgb = res[:, :, ::-1] 
+        else:
+            res_rgb = res
 
-        print("前向过程示意图片已保存。")
+        plt.figure(figsize=(6, 3)) # 根据生成的拼接图大小调整比例
+        plt.imshow(res_rgb, cmap='gray' if len(res.shape) == 2 or res.shape[2] == 1 else None)
+        plt.axis('off') # 隐藏坐标轴
+        plt.show()
 
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
