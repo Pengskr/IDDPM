@@ -376,13 +376,13 @@ class UNetModel(nn.Module):
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 input_block_chans.append(ch)
-            if level != len(channel_mult) - 1:
+            if level != len(channel_mult) - 1:  # 编码器的最后一层不进行下采样，即编码器最后一层到中间层的分辨率不变
                 self.input_blocks.append(
                     TimestepEmbedSequential(Downsample(ch, conv_resample, dims=dims))
                 )
                 input_block_chans.append(ch)
                 ds *= 2
-
+        
         # 中间层，包含一个 ResBlock、一个 AttentionBlock 和另一个 ResBlock，并没有改变通道数和分辨率
         self.middle_block = TimestepEmbedSequential(
             ResBlock(
