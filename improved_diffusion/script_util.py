@@ -14,6 +14,7 @@ def model_and_diffusion_defaults():
     """
     return dict(
         image_size=64,
+        biased_initialization = False,  # 偏置初始化-范式P2
         num_channels=64,                # 模型每一层的基础通道数，乘以 channel_mult 后得到每一层的实际通道数，增加 num_channels 可以提升模型的表达能力，但也会增加计算资源的需求
         num_res_blocks=2,
         num_heads=2,                    # 控制多头注意力机制中头的数量，增加头的数量可以让模型在不同的子空间中学习不同的特征表示，从而提升模型的表达能力和性能
@@ -55,6 +56,7 @@ def create_model_and_diffusion(
     rescale_learned_sigmas,
     use_checkpoint,
     use_scale_shift_norm,
+    biased_initialization,
 ):
     model = create_model(
         image_size,
@@ -79,6 +81,7 @@ def create_model_and_diffusion(
         rescale_timesteps=rescale_timesteps,
         rescale_learned_sigmas=rescale_learned_sigmas,
         timestep_respacing=timestep_respacing,
+        biased_initialization = biased_initialization,
     )
     return model, diffusion
 
@@ -240,6 +243,7 @@ def create_gaussian_diffusion(
     rescale_timesteps=False,
     rescale_learned_sigmas=False,
     timestep_respacing="",
+    biased_initialization = False,
 ):
     betas = gd.get_named_beta_schedule(noise_schedule, steps)
     if use_kl:
@@ -267,6 +271,7 @@ def create_gaussian_diffusion(
         ),
         loss_type=loss_type,
         rescale_timesteps=rescale_timesteps,
+        biased_initialization=biased_initialization,
     )
 
 
