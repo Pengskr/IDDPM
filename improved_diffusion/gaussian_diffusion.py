@@ -128,12 +128,14 @@ class GaussianDiffusion:
         loss_type,
         rescale_timesteps=False,
         biased_initialization=False,
+        weight_path_similarity= 0.0,
     ):
         self.model_mean_type = model_mean_type  # 如果 predict_xstart 为 False，则模型预测噪声 epsilon；如果 predict_xstart 为 True，则模型直接预测原始图像 x_0，这两种方式在训练和采样过程中会有不同的表现和效果
         self.model_var_type = model_var_type
         self.loss_type = loss_type
         self.rescale_timesteps = rescale_timesteps
         self.biased_initialization = 1.0 if biased_initialization else 0.0
+        self.weight_path_similarity = weight_path_similarity
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -731,7 +733,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_input = th.cat([x_t, M_o], dim=1) # 结果为 [Batch, 2, H, W]
+            model_input = th.cat([x_t, M_o], dim=1)                                     # 结果为 [Batch, 2, H, W]
             model_output = model(model_input, self._scale_timesteps(t), **model_kwargs) # 神经网络预测：Unet的输出，可能是噪声epsilon或x_0和可学习方差(learn_sigma=True)
 
             if self.model_var_type in [
@@ -764,7 +766,10 @@ class GaussianDiffusion:
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)  # 模型预测目标（通常是噪声 $\epsilon$）与真实目标之间的均方误差。这是扩散模型最核心的训练目标
+
+            pred_xstart = self._predict_xstart_from_eps(x_t=x_t, t=t, eps=model_output)
+            terms["mse"] = mean_flat((target - model_output) ** 2) + self.weight_path_similarity * mean_flat((x_start - pred_xstart) ** 2)  # 模型预测目标（通常是噪声 $\epsilon$）与真实目标之间的均方误差，这是扩散模型最核心的训练目标（考虑路径相似度损失）
+            
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]          # 模型训练的总目标函数值，如果不学习方差：loss 等于 mse；如果学习方差：loss = mse + vb，这里的 vb 是变分下界（Variational Bound）损失，用于指导模型学习方差。
             else:
