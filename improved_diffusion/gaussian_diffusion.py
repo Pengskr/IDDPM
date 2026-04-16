@@ -768,7 +768,9 @@ class GaussianDiffusion:
             assert model_output.shape == target.shape == x_start.shape
 
             pred_xstart = self._predict_xstart_from_eps(x_t=x_t, t=t, eps=model_output)
-            terms["mse"] = mean_flat((target - model_output) ** 2) + self.weight_path_similarity * mean_flat((x_start - pred_xstart) ** 2)  # 模型预测目标（通常是噪声 $\epsilon$）与真实目标之间的均方误差，这是扩散模型最核心的训练目标（考虑路径相似度损失）
+            terms['Path_simi_loss'] = self.loss_path_similarity(x_start, pred_xstart)
+            
+            terms["mse"] = mean_flat((target - model_output) ** 2) + terms['Path_simi_loss']  # 模型预测目标（通常是噪声 $\epsilon$）与真实目标之间的均方误差，这是扩散模型最核心的训练目标（考虑路径相似度损失）
             
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]          # 模型训练的总目标函数值，如果不学习方差：loss 等于 mse；如果学习方差：loss = mse + vb，这里的 vb 是变分下界（Variational Bound）损失，用于指导模型学习方差。
@@ -778,6 +780,9 @@ class GaussianDiffusion:
             raise NotImplementedError(self.loss_type)
 
         return terms
+
+    def loss_path_similarity(self, x_start, pred_xstart):
+        return self.weight_path_similarity * mean_flat((x_start - pred_xstart) ** 2)
 
     def _prior_bpd(self, x_start):
         """
