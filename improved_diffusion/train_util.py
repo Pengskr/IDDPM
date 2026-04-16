@@ -34,7 +34,8 @@ class TrainLoop:
         model,
         diffusion,
         sample_diffusion,
-        sample_M_o,
+        sample_Mo,
+        sample_Mr,
         sample_P,
         data,
         batch_size,
@@ -49,12 +50,15 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        use_Mr = False,
     ):
         self.model = model
         self.diffusion = diffusion
         self.sample_diffusion = sample_diffusion
-        self.sample_M_o = sample_M_o.to(dist_util.dev())
+        self.sample_Mo = sample_Mo.to(dist_util.dev())
+        self.sample_Mr = sample_Mr.to(dist_util.dev()) if use_Mr else sample_Mo.to(dist_util.dev())
         self.sample_P = sample_P.to(dist_util.dev())
+        self.use_Mr = use_Mr
         self.data = data
         self.batch_size = batch_size
         self.microbatch = microbatch if microbatch > 0 else batch_size
@@ -176,8 +180,9 @@ class TrainLoop:
             not self.lr_anneal_steps                                    # 无限模式：如果 lr_anneal_steps 设为 0（默认通常如此），循环将永远运行下去，直到你手动停止。
             or self.step + self.resume_step < self.lr_anneal_steps      # 有限模式：如果你设定了具体lr_anneal_steps（例如 500,000 步），它会计算 当前步数 + 已训步数 是否达到了目标。
         ):
-            M_o, P_i, cond, _ = next(self.data)                            # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）。
-            self.run_step(M_o, P_i, cond)                               # 执行一个训练步骤，包括前向传播、反向传播和优化器更新
+            M_o, M_r, P_i, cond, _ = next(self.data)                         # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）。
+            M_r = M_r if self.use_Mr else M_o
+            self.run_step(M_o, M_r, P_i, cond)                               # 执行一个训练步骤，包括前向传播、反向传播和优化器更新
             if self.step % self.log_interval == 0:
                 # 仅在主进程计算测试损失，避免多卡重复计算耗时
                 if dist.get_rank() == 0:
@@ -208,7 +213,7 @@ class TrainLoop:
                 self.save()                                             # 每隔 save_interval 步，保存模型检查点。
                 # 在保存模型时进行一次采样观察
                 if dist.get_rank() == 0:
-                    self.log_samples(self.sample_M_o, self.sample_P) # 使用当前 batch 的地图作为条件
+                    self.log_samples(self.sample_Mo, self.sample_Mr, self.sample_P) # 使用当前 batch 的地图作为条件
 
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
@@ -232,7 +237,8 @@ class TrainLoop:
             model_kwargs = {}
             gen_P = self.sample_diffusion.ddim_sample_loop(
                 self.model,
-                self.sample_M_o,
+                self.sample_Mo,
+                self.sample_Mr,
                 self.sample_P.shape,
                 clip_denoised=True,
                 model_kwargs=model_kwargs,
@@ -274,7 +280,7 @@ class TrainLoop:
         plt.close()         
 
     # 在 TrainLoop 类中新增方法
-    def log_samples(self, M_o, P):
+    def log_samples(self, M_o, M_r, P):
         self.model.eval() # 切换到评估模式
         with th.no_grad():                       
             batch_size = M_o.shape[0]
@@ -288,6 +294,7 @@ class TrainLoop:
             sample = self.sample_diffusion.ddim_sample_loop(
                 self.model,
                 M_o.to(dist_util.dev()), 
+                M_r.to(dist_util.dev()), 
                 M_o.shape,
                 clip_denoised=True,
                 model_kwargs=model_kwargs,
@@ -296,7 +303,7 @@ class TrainLoop:
             
             # 可视化前处理：恢复到 0-255 像素范围并转为 Numpy
             sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8).cpu().numpy()
-            M_o_cpu = M_o.cpu().numpy()
+            M_r_cpu = ((M_r + 1) * 127.5).clamp(0, 255).to(th.uint8).cpu().numpy()
             # 同样处理真实路径 P
             P_cpu = ((P + 1) * 127.5).clamp(0, 255).to(th.uint8).cpu().numpy()
             
@@ -313,11 +320,15 @@ class TrainLoop:
                 set_idx = i % sets_per_row
                 col_start = set_idx * num_cols_per_set
                 
-                # 1. 绘制地图 M_o
-                ax_mo = axes[row, col_start]
-                ax_mo.imshow(M_o_cpu[i, 0], cmap='gray')
-                ax_mo.axis('off')
-                if row == 0: ax_mo.set_title("M_o", fontsize=8)
+                # 1. 绘制地图 M_r
+                ax_mr = axes[row, col_start]
+                if self.use_Mr:
+                    ax_mr.imshow(M_r_cpu[i].transpose(1, 2, 0)) # 注意：这里不需要 cmap='gray'
+                    if row == 0: ax_mr.set_title("M_r to model", fontsize=8)
+                else:
+                    ax_mr.imshow(M_r_cpu[i].transpose(1, 2, 0), cmap='gray')
+                    if row == 0: ax_mr.set_title("M_o to model", fontsize=8)
+                ax_mr.axis('off')                
                 
                 # 2. 绘制真实路径 P
                 ax_p = axes[row, col_start + 1]
@@ -344,18 +355,19 @@ class TrainLoop:
 
         self.model.train() # 恢复到训练模式
 
-    def run_step(self, M_o, P_i, cond):
-        self.forward_backward(M_o, P_i, cond)
+    def run_step(self, M_o, M_r, P_i, cond):
+        self.forward_backward(M_o, M_r, P_i, cond)
         if self.use_fp16:
             self.optimize_fp16()
         else:
             self.optimize_normal()
         self.log_step()
 
-    def forward_backward(self, M_o, P_i, cond):
+    def forward_backward(self, M_o, M_r, P_i, cond):
         zero_grad(self.model_params)
         for i in range(0, M_o.shape[0], self.microbatch):
             micro_M_o = M_o[i : i + self.microbatch].to(dist_util.dev())
+            micro_M_r = M_r[i : i + self.microbatch].to(dist_util.dev())
             micro_P_i = P_i[i : i + self.microbatch].to(dist_util.dev())
             micro_cond = {
                 k: v[i : i + self.microbatch].to(dist_util.dev())
@@ -368,6 +380,7 @@ class TrainLoop:
                 self.diffusion.training_losses, # 进行一次前向过程和神经网络预测，计算损失函数，返回一个字典，包含了不同类型的损失（如 "loss", "mse", "vb" 等），这些损失可以用于监控训练过程中的性能和收敛情况
                 self.ddp_model,
                 micro_M_o,
+                micro_M_r,
                 micro_P_i,
                 t,
                 model_kwargs=micro_cond,

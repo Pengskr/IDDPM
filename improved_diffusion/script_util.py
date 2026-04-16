@@ -16,6 +16,7 @@ def model_and_diffusion_defaults():
         image_size=64,
         biased_initialization = False,  # 偏置初始化-范式P2
         weight_path_similarity = 0.0,
+        use_Mr = False,
         num_channels=64,                # 模型每一层的基础通道数，乘以 channel_mult 后得到每一层的实际通道数，增加 num_channels 可以提升模型的表达能力，但也会增加计算资源的需求
         num_res_blocks=2,
         num_heads=2,                    # 控制多头注意力机制中头的数量，增加头的数量可以让模型在不同的子空间中学习不同的特征表示，从而提升模型的表达能力和性能
@@ -59,10 +60,12 @@ def create_model_and_diffusion(
     use_scale_shift_norm,
     biased_initialization,
     weight_path_similarity,
+    use_Mr,
 ):
     model = create_model(
         image_size,
         num_channels,
+        use_Mr,
         num_res_blocks,
         learn_sigma=learn_sigma,
         class_cond=class_cond,
@@ -92,6 +95,7 @@ def create_model_and_diffusion(
 def create_model(
     image_size,
     num_channels,
+    use_Mr,
     num_res_blocks,
     learn_sigma,
     class_cond,
@@ -118,7 +122,7 @@ def create_model(
         attention_ds.append(image_size // int(res))
 
     return UNetModel(
-        in_channels=2,                                          # 输入图像的通道数，输入为x_t,M_o  
+        in_channels=4 if use_Mr else 2,                         # 输入图像的通道数，输入为 M_o或M_r，x_t  
         model_channels=num_channels,                            # mc：模型每一层的基础通道数，乘以channel_mult后得到每一层的实际通道数，中间层的输入输出通道数不变：num_channels * channel_mult[-1]
         out_channels=(1 if not learn_sigma else 2),             # 输出通道数，如果 learn_sigma 为 False，则输出3通道的图像；如果 learn_sigma 为 True，则输出6通道，其中前3通道用于预测图像，后3通道用于预测噪声的方差
         num_res_blocks=num_res_blocks,                          # nr：每个分辨率下的残差块数量  

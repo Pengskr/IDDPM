@@ -264,9 +264,9 @@ class GaussianDiffusion:
         if model_kwargs is None:
             model_kwargs = {}
         
-        if "M_o" in model_kwargs:
-            M_o = model_kwargs.pop("M_o", None)
-            model_input = th.cat([x, M_o], dim=1)
+        if "M_r" in model_kwargs:
+            M_r = model_kwargs.pop("M_r", None)
+            model_input = th.cat([x, M_r], dim=1)
         else:
             # 如果没有传，可能报错或回退
             model_input = x
@@ -496,6 +496,7 @@ class GaussianDiffusion:
         self,
         model,
         M_o,
+        M_r,
         x,
         t,
         clip_denoised=True,
@@ -508,7 +509,7 @@ class GaussianDiffusion:
 
         Same usage as p_sample().
         """
-        model_kwargs = {"M_o": M_o}
+        model_kwargs = {"M_r": M_r}
         out = self.p_mean_variance(
             model,
             x,
@@ -584,6 +585,7 @@ class GaussianDiffusion:
         self,
         model,
         M_o,
+        M_r,
         shape,
         noise=None,
         clip_denoised=True,
@@ -602,6 +604,7 @@ class GaussianDiffusion:
         for sample in self.ddim_sample_loop_progressive(
             model,
             M_o,
+            M_r,
             shape,
             noise=noise,
             clip_denoised=clip_denoised,
@@ -618,6 +621,7 @@ class GaussianDiffusion:
         self,
         model,
         M_o,
+        M_r,
         shape,
         noise=None,
         clip_denoised=True,
@@ -649,12 +653,14 @@ class GaussianDiffusion:
             indices = tqdm(indices)
 
         M_o = M_o.to(next(model.parameters()).device)
+        M_r = M_r.to(next(model.parameters()).device)
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
                 out = self.ddim_sample(
                     model,
                     M_o,
+                    M_r,
                     img,
                     t,
                     clip_denoised=clip_denoised,
@@ -700,7 +706,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, M_o, x_start, t, model_kwargs=None, noise=None):
+    def training_losses(self, model, M_o, M_r, x_start, t, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
 
@@ -733,7 +739,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_input = th.cat([x_t, M_o], dim=1)                                     # 结果为 [Batch, 2, H, W]
+            model_input = th.cat([x_t, M_r], dim=1)                                     # 结果为 [Batch, 2或4, H, W]
             model_output = model(model_input, self._scale_timesteps(t), **model_kwargs) # 神经网络预测：Unet的输出，可能是噪声epsilon或x_0和可学习方差(learn_sigma=True)
 
             if self.model_var_type in [
@@ -859,9 +865,9 @@ class GaussianDiffusion:
             "mse": mse,
         }
     
-    def extract_forward(self, dataloader_P, device, n_steps, noise=None):
+    def extract_forward(self, dataloader_train, device, n_steps, noise=None):
         device = device
-        M_o, P_i, _, _ = next(iter(dataloader_P))
+        M_o, _, P_i, _, _ = next(iter(dataloader_train))
         P_i = P_i.to(device)
         M_o = M_o.to(device)
 
@@ -879,15 +885,8 @@ class GaussianDiffusion:
         res = (res.clip(-1, 1) + 1) / 2 * 255
         res = res.cpu().numpy().astype(np.uint8)
 
-        # 如果 res 是 BGR 格式 (OpenCV 默认)，需要转为 RGB 才能正常显示颜色
-        # 如果 res 只有 1 个通道 (灰度图)，则不需要这一步
-        if len(res.shape) == 3 and res.shape[2] == 3:
-            res_rgb = res[:, :, ::-1] 
-        else:
-            res_rgb = res
-
         plt.figure(figsize=(8, 9)) # 根据生成的拼接图大小调整比例
-        plt.imshow(res_rgb, cmap='gray' if len(res.shape) == 2 or res.shape[2] == 1 else None)
+        plt.imshow(res, cmap='gray')
         plt.axis('off') # 隐藏坐标轴
         plt.show()
 
