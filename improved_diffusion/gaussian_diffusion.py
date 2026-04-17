@@ -267,6 +267,7 @@ class GaussianDiffusion:
         if "M_r" in model_kwargs:
             M_r = model_kwargs.pop("M_r", None)
             model_input = th.cat([x, M_r], dim=1)
+            # model_input = x + M_r
         else:
             # 如果没有传，可能报错或回退
             model_input = x
@@ -739,7 +740,8 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_input = th.cat([x_t, M_r], dim=1)                                     # 结果为 [Batch, 2或4, H, W]
+            model_input = th.cat([x_t, M_r], dim=1)                                     # 拼接，结果为 [Batch, 2或4, H, W]
+            # model_input = x_t + M_r                                                     # 直接相加，结果为[Batch, 1或3, H, W]
             model_output = model(model_input, self._scale_timesteps(t), **model_kwargs) # 神经网络预测：Unet的输出，可能是噪声epsilon或x_0和可学习方差(learn_sigma=True)
 
             if self.model_var_type in [
