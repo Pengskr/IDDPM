@@ -20,7 +20,7 @@ from .nn import (
 )
 from .RRDB import RRDBMapEncoder
 from .MFF import MFFModule
-# from .MCA import MCAModule
+from .MCA import MACModule
 
 class TimestepBlock(nn.Module):
     """
@@ -454,9 +454,8 @@ class UNetModel(nn.Module):
         for mult in channel_mult:
             self.mff_modules.append(MFFModule(model_channels * mult))
 
-        # # 定义 MCA 模块 (Map-Conditioned Attention)，放置在编码器末尾（分辨率最低层级）
-        # last_channels = model_channels * channel_mult[-1]
-        # self.mca_module = MCAModule(last_channels)
+        # 定义 MCA 模块 (Map-Conditioned Attention)，放置在编码器末尾（分辨率最低层级）
+        self.mac_module = MACModule(channels=model_channels * mult)
 
     def convert_to_fp16(self):
         """
@@ -480,37 +479,6 @@ class UNetModel(nn.Module):
         Get the dtype used by the torso of the model.
         """
         return next(self.input_blocks.parameters()).dtype
-
-    # def forward(self, x, timesteps, y=None):
-    #     """
-    #     Apply the model to an input batch.
-
-    #     :param x: an [N x C x ...] Tensor of inputs.
-    #     :param timesteps: a 1-D batch of timesteps.
-    #     :param y: an [N] Tensor of labels, if class-conditional.
-    #     :return: an [N x C x ...] Tensor of outputs.
-    #     """
-    #     assert (y is not None) == (
-    #         self.num_classes is not None
-    #     ), "must specify y if and only if the model is class-conditional"
-
-    #     hs = []
-    #     emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
-
-    #     if self.num_classes is not None:
-    #         assert y.shape == (x.shape[0],)
-    #         emb = emb + self.label_emb(y)
-
-    #     h = x.type(self.inner_dtype)
-    #     for module in self.input_blocks:    # 解码器（输入层和下采样层），逐层处理输入图像，并在需要时将中间特征图保存到 hs 列表中，以便后续的上采样层使用
-    #         h = module(h, emb)
-    #         hs.append(h)
-    #     h = self.middle_block(h, emb)       # 中间层，处理下采样后的特征图，提取更抽象的特征表示
-    #     for module in self.output_blocks:   # 编码器（上采样层），逐层处理特征图，并在需要时将之前保存的特征图与当前特征图进行拼接，以便恢复空间分辨率和细节信息
-    #         cat_in = th.cat([h, hs.pop()], dim=1)
-    #         h = module(cat_in, emb)
-    #     h = h.type(x.dtype)
-    #     return self.out(h)
 
     def forward(self, x, timesteps, y=None, M_r=None):
             """
@@ -566,6 +534,9 @@ class UNetModel(nn.Module):
                 hs.append(h)
 
             h = self.middle_block(h, emb)       # 中间层，处理下采样后的特征图，提取更抽象的特征表示
+            # 在中间层末尾调用 MAC 模块进行融合
+            h = self.mac_module(h, map_hierarchical_features[-1])
+
             for module in self.output_blocks:   # 编码器（上采样层），逐层处理特征图，并在需要时将之前保存的特征图与当前特征图进行拼接，以便恢复空间分辨率和细节信息
                 cat_in = th.cat([h, hs.pop()], dim=1)
                 h = module(cat_in, emb)
