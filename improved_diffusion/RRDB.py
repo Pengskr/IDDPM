@@ -49,11 +49,20 @@ class RRDBMapEncoder(nn.Module):
             )
             self.layers.append(layer)
             curr_mc = mc * mult
+        
+        # 为 U-Net 中间层准备的特征提取层
+        self.middle_layer = RRDB(curr_mc, gc=gc)
 
     def forward(self, m):
         m_fea = self.conv_first(m)
         hierarchical_features = []
+        # 提取特征 (供 MFF 注入编码器使用)
         for layer in self.layers:
             m_fea = layer(m_fea)
             hierarchical_features.append(m_fea)
-        return hierarchical_features # 返回各层特征列表供 MFF 使用
+            
+        # 生成特征 (供中间层使用)
+        mid_fea = self.middle_layer(m_fea)
+        hierarchical_features.append(mid_fea)
+        
+        return hierarchical_features
