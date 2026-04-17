@@ -18,7 +18,9 @@ from .nn import (
     timestep_embedding,
     checkpoint,
 )
-
+from .RRDB import RRDBMapEncoder
+from .MFF import MFFModule
+# from .MCA import MCAModule
 
 class TimestepBlock(nn.Module):
     """
@@ -314,6 +316,7 @@ class UNetModel(nn.Module):
         num_heads=1,
         num_heads_upsample=-1,
         use_scale_shift_norm=False,
+        use_MFF_MAC = False,
     ):
         super().__init__()
 
@@ -332,6 +335,7 @@ class UNetModel(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.num_heads = num_heads
         self.num_heads_upsample = num_heads_upsample
+        self.use_MFF_MAC = use_MFF_MAC
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -437,6 +441,22 @@ class UNetModel(nn.Module):
             SiLU(),
             zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
         )
+        
+        # 定义 RRDB 地图编码器，输入为 3 通道 (RGB map)，基础通道数需与 model_channels 对齐
+        self.rrdb = RRDBMapEncoder(
+            in_nc=3, 
+            mc=model_channels, 
+            channel_mult=channel_mult
+        )
+
+        # 定义 MFF 模块列表 (Map Feature Fusion)，为每一个分辨率层级创建一个融合模块
+        self.mff_modules = nn.ModuleList()
+        for mult in channel_mult:
+            self.mff_modules.append(MFFModule(model_channels * mult))
+
+        # # 定义 MCA 模块 (Map-Conditioned Attention)，放置在编码器末尾（分辨率最低层级）
+        # last_channels = model_channels * channel_mult[-1]
+        # self.mca_module = MCAModule(last_channels)
 
     def convert_to_fp16(self):
         """
@@ -461,36 +481,102 @@ class UNetModel(nn.Module):
         """
         return next(self.input_blocks.parameters()).dtype
 
-    def forward(self, x, timesteps, y=None):
-        """
-        Apply the model to an input batch.
+    # def forward(self, x, timesteps, y=None):
+    #     """
+    #     Apply the model to an input batch.
 
-        :param x: an [N x C x ...] Tensor of inputs.
-        :param timesteps: a 1-D batch of timesteps.
-        :param y: an [N] Tensor of labels, if class-conditional.
-        :return: an [N x C x ...] Tensor of outputs.
-        """
-        assert (y is not None) == (
-            self.num_classes is not None
-        ), "must specify y if and only if the model is class-conditional"
+    #     :param x: an [N x C x ...] Tensor of inputs.
+    #     :param timesteps: a 1-D batch of timesteps.
+    #     :param y: an [N] Tensor of labels, if class-conditional.
+    #     :return: an [N x C x ...] Tensor of outputs.
+    #     """
+    #     assert (y is not None) == (
+    #         self.num_classes is not None
+    #     ), "must specify y if and only if the model is class-conditional"
 
-        hs = []
-        emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+    #     hs = []
+    #     emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
-        if self.num_classes is not None:
-            assert y.shape == (x.shape[0],)
-            emb = emb + self.label_emb(y)
+    #     if self.num_classes is not None:
+    #         assert y.shape == (x.shape[0],)
+    #         emb = emb + self.label_emb(y)
 
-        h = x.type(self.inner_dtype)
-        for module in self.input_blocks:    # 解码器（输入层和下采样层），逐层处理输入图像，并在需要时将中间特征图保存到 hs 列表中，以便后续的上采样层使用
-            h = module(h, emb)
-            hs.append(h)
-        h = self.middle_block(h, emb)       # 中间层，处理下采样后的特征图，提取更抽象的特征表示
-        for module in self.output_blocks:   # 编码器（上采样层），逐层处理特征图，并在需要时将之前保存的特征图与当前特征图进行拼接，以便恢复空间分辨率和细节信息
-            cat_in = th.cat([h, hs.pop()], dim=1)
-            h = module(cat_in, emb)
-        h = h.type(x.dtype)
-        return self.out(h)
+    #     h = x.type(self.inner_dtype)
+    #     for module in self.input_blocks:    # 解码器（输入层和下采样层），逐层处理输入图像，并在需要时将中间特征图保存到 hs 列表中，以便后续的上采样层使用
+    #         h = module(h, emb)
+    #         hs.append(h)
+    #     h = self.middle_block(h, emb)       # 中间层，处理下采样后的特征图，提取更抽象的特征表示
+    #     for module in self.output_blocks:   # 编码器（上采样层），逐层处理特征图，并在需要时将之前保存的特征图与当前特征图进行拼接，以便恢复空间分辨率和细节信息
+    #         cat_in = th.cat([h, hs.pop()], dim=1)
+    #         h = module(cat_in, emb)
+    #     h = h.type(x.dtype)
+    #     return self.out(h)
+
+    def forward(self, x, timesteps, y=None, M_r=None):
+            """
+            根据 DiffRP 的 MFF 范式修改的 forward 函数
+
+            Apply the model to an input batch.
+
+            :param x: an [N x C x ...] Tensor of inputs.
+            :param timesteps: a 1-D batch of timesteps.
+            :param y: an [N] Tensor of labels, if class-conditional.
+            :return: an [N x C x ...] Tensor of outputs.
+            """
+            assert (y is not None) == (
+                self.num_classes is not None
+            ), "must specify y if and only if the model is class-conditional"
+            if M_r is None:
+                raise ValueError("DiffRP requires conditioned_image (M_r) to be provided.")
+            
+            hs = []
+            emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+
+            if self.num_classes is not None:
+                assert y.shape == (x.shape[0],)
+                emb = emb + self.label_emb(y)
+
+            # RRDBMapEncoder 
+            map_hierarchical_features = self.rrdb(M_r.type(self.inner_dtype))
+            
+            h = x.type(self.inner_dtype)
+            mff_idx = 0
+            for i, module in enumerate(self.input_blocks):
+                # 执行 U-Net 内部的 ResBlock 或 Downsample 计算
+                h = module(h, emb)
+                
+                # 核心注入点 A：检测到下采样完成，立即进行 MFF 融合
+                if self._is_downsample_block(module):
+                    if mff_idx < len(self.mff_modules):
+                        m_f = map_hierarchical_features[mff_idx]
+                        # MFF 处理：拼接 -> 深度可分离卷积 -> 残差加回 -> 最终卷积 
+                        h = self.mff_modules[mff_idx](h, m_f)
+                        mff_idx += 1
+                
+                # 核心注入点 B：在进入中间块 (Bottleneck) 之前应用最后的 MFF 和 MCA [cite: 239]
+                if i == len(self.input_blocks) - 1:
+                    # 对应最后一层级（分辨率最低处）的融合
+                    if mff_idx < len(self.mff_modules):
+                        m_f = map_hierarchical_features[mff_idx]
+                        h = self.mff_modules[mff_idx](h, m_f)
+                        # 在 Bottleneck 之前通过 MCA 注入高层级地图特征 [cite: 239]
+                        # h = self.mca_module(h, m_f)
+
+                # 将（融合后的）特征存入 hs，供解码器作为 skip connection 使用
+                hs.append(h)
+
+            h = self.middle_block(h, emb)       # 中间层，处理下采样后的特征图，提取更抽象的特征表示
+            for module in self.output_blocks:   # 编码器（上采样层），逐层处理特征图，并在需要时将之前保存的特征图与当前特征图进行拼接，以便恢复空间分辨率和细节信息
+                cat_in = th.cat([h, hs.pop()], dim=1)
+                h = module(cat_in, emb)
+            h = h.type(x.dtype)
+            return self.out(h)
+
+    def _is_downsample_block(self, module):
+        for sub in module:
+            if isinstance(sub, Downsample):
+                return True
+        return False
 
     def get_feature_vectors(self, x, timesteps, y=None):
         """
