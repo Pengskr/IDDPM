@@ -50,15 +50,13 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
-        use_Mr = False,
     ):
         self.model = model
         self.diffusion = diffusion
         self.sample_diffusion = sample_diffusion
         self.sample_Mo = sample_Mo.to(dist_util.dev())
-        self.sample_Mr = sample_Mr.to(dist_util.dev()) if use_Mr else sample_Mo.to(dist_util.dev())
+        self.sample_Mr = sample_Mr.to(dist_util.dev())
         self.sample_P = sample_P.to(dist_util.dev())
-        self.use_Mr = use_Mr
         self.data = data
         self.batch_size = batch_size
         self.microbatch = microbatch if microbatch > 0 else batch_size
@@ -181,7 +179,6 @@ class TrainLoop:
             or self.step + self.resume_step < self.lr_anneal_steps      # 有限模式：如果你设定了具体lr_anneal_steps（例如 500,000 步），它会计算 当前步数 + 已训步数 是否达到了目标。
         ):
             M_o, M_r, P_i, cond, _ = next(self.data)                         # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）。
-            M_r = M_r if self.use_Mr else M_o
             self.run_step(M_o, M_r, P_i, cond)                               # 执行一个训练步骤，包括前向传播、反向传播和优化器更新
             if self.step % self.log_interval == 0:
                 # 仅在主进程计算测试损失，避免多卡重复计算耗时
@@ -322,12 +319,8 @@ class TrainLoop:
                 
                 # 1. 绘制地图 M_r
                 ax_mr = axes[row, col_start]
-                if self.use_Mr:
-                    ax_mr.imshow(M_r_cpu[i].transpose(1, 2, 0)) # 注意：这里不需要 cmap='gray'
-                    if row == 0: ax_mr.set_title("M_r to model", fontsize=8)
-                else:
-                    ax_mr.imshow(M_r_cpu[i].transpose(1, 2, 0), cmap='gray')
-                    if row == 0: ax_mr.set_title("M_o to model", fontsize=8)
+                ax_mr.imshow(M_r_cpu[i].transpose(1, 2, 0)) # 注意：这里不需要 cmap='gray'
+                if row == 0: ax_mr.set_title("M_r to model", fontsize=8)
                 ax_mr.axis('off')                
                 
                 # 2. 绘制真实路径 P
