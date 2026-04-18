@@ -783,6 +783,35 @@ class GaussianDiffusion:
     def loss_path_similarity(self, x_start, pred_xstart):
         return self.weight_path_similarity * mean_flat((x_start - pred_xstart) ** 2)
 
+    def compute_F1_score(self, P, gen_P, Path_inverse=False):
+        """
+        Args:
+            path_inverse (bool): 如果为 True, 则 -1 是路径；如果为 False, 则 1 是路径。
+        """
+        # 动态确定路径点的判定条件
+        if Path_inverse:
+            # -1 是路径点，我们将其判定为 1 (Positive)
+            target = (P < 0).float()
+            pred = (gen_P < 0).float()
+        else:
+            # 1 是路径点
+            target = (P > 0).float()
+            pred = (gen_P > 0).float()
+
+        # 后续计算 TP, FP, FN 的逻辑保持不变...
+        target = target.view(target.size(0), -1)
+        pred = pred.view(pred.size(0), -1)
+        
+        tp = (target * pred).sum(dim=1)
+        fp = ((1 - target) * pred).sum(dim=1)
+        fn = (target * (1 - pred)).sum(dim=1)
+
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+
+        return f1.mean().item()
+
     def _prior_bpd(self, x_start):
         """
         Get the prior KL term for the variational lower-bound, measured in
