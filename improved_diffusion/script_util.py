@@ -21,7 +21,7 @@ def model_and_diffusion_defaults():
         num_res_blocks=2,
         num_heads=2,                    # 控制多头注意力机制中头的数量，增加头的数量可以让模型在不同的子空间中学习不同的特征表示，从而提升模型的表达能力和性能
         num_heads_upsample=-1,
-        attention_resolutions="8, 4",   # 控制在哪些分辨率（如 16x16, 8x8）下开启注意力
+        attention_resolutions="8, 4",   # 控制U-Net中的 ResBlock+AttenBlock 在哪些分辨率（如 16x16, 8x8）下开启注意力
         dropout=0.0,                    # dropout 率，增加 dropout 可以帮助模型防止过拟合，但过高的 dropout 率可能会导致模型欠拟合
         learn_sigma=False,
         sigma_small=False,
