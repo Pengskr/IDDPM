@@ -182,13 +182,13 @@ class TrainLoop:
             not self.lr_anneal_steps                                    # 无限模式：如果 lr_anneal_steps 设为 0（默认通常如此），循环将永远运行下去，直到你手动停止。
             or self.step + self.resume_step < self.lr_anneal_steps      # 有限模式：如果你设定了具体lr_anneal_steps（例如 500,000 步），它会计算 当前步数 + 已训步数 是否达到了目标。
         ):
-            M_o, M_r, P_i, cond, _ = next(self.data)                    # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）。
+            M_o, M_r, P_i, cond, _ = next(self.data)                    # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）
             self.run_step(M_o, M_r, P_i, cond)                          # 执行一个训练步骤，包括前向传播、反向传播和优化器更新
             if self.step % self.log_interval == 0:
                 if dist.get_rank() == 0:
                     gen_P, t_loss, f1 = self.evaluate_and_sample(use_ema=False)
                     ema_gen_P, ema_t_loss, ema_f1 = self.evaluate_and_sample(use_ema=True)
-                    self.save_comparison_image(M_r, P_i, gen_P, ema_gen_P)
+                    self.save_comparison_image(self.sample_Mr, self.sample_P, gen_P, ema_gen_P)
                     
                     self.test_loss_history.append(t_loss)
                     self.ema_test_loss_history.append(ema_t_loss)
@@ -209,7 +209,7 @@ class TrainLoop:
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
             self.step += 1
-            
+
         if (self.step - 1) % self.save_interval != 0:
             self.save()
     
