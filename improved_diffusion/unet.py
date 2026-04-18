@@ -20,7 +20,7 @@ from .nn import (
 )
 from .RRDB import RRDBMapEncoder
 from .MFF import MFFModule
-from .MCA import MACModule
+from .MCA import MCAModule
 
 class TimestepBlock(nn.Module):
     """
@@ -455,7 +455,7 @@ class UNetModel(nn.Module):
             self.mff_modules.append(MFFModule(model_channels * mult))
 
         # 定义 MCA 模块 (Map-Conditioned Attention)，放置在编码器末尾（分辨率最低层级）
-        self.mac_module = MACModule(channels=model_channels * mult)
+        self.mca_module = MCAModule(channels=model_channels * mult)
 
     def convert_to_fp16(self):
         """
@@ -527,15 +527,13 @@ class UNetModel(nn.Module):
                     if mff_idx < len(self.mff_modules):
                         m_f = map_hierarchical_features[mff_idx]
                         h = self.mff_modules[mff_idx](h, m_f)
-                        # 在 Bottleneck 之前通过 MCA 注入高层级地图特征 [cite: 239]
-                        # h = self.mca_module(h, m_f)
 
                 # 将（融合后的）特征存入 hs，供解码器作为 skip connection 使用
                 hs.append(h)
 
             h = self.middle_block(h, emb)       # 中间层，处理下采样后的特征图，提取更抽象的特征表示
             # 在中间层末尾调用 MAC 模块进行融合
-            h = self.mac_module(h, map_hierarchical_features[-1])
+            h = self.mca_module(h, map_hierarchical_features[-1])
 
             for module in self.output_blocks:   # 编码器（上采样层），逐层处理特征图，并在需要时将之前保存的特征图与当前特征图进行拼接，以便恢复空间分辨率和细节信息
                 cat_in = th.cat([h, hs.pop()], dim=1)
