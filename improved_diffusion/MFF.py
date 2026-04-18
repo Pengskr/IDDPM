@@ -22,7 +22,7 @@ class MFFModule(nn.Module):
 
         # 2. 深度可分离卷积处理并加上残差连接
         out = self.depthwise_sep_conv(combined)
-        out = out + x_f 
+        out = out * 0.2 + x_f 
         
         # 3. 最终卷积
         return self.final_conv(out)
