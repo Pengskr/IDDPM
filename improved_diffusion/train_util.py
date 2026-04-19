@@ -1,6 +1,7 @@
 import copy
 import functools
 import os
+import time
 
 import blobfile as bf
 import numpy as np
@@ -21,6 +22,7 @@ from .fp16_util import (
 from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
 from .losses import loss_path_similarity, compute_F1_score
+from .script_util import sample_filter
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -54,6 +56,9 @@ class TrainLoop:
         weight_decay=0.0,
         lr_anneal_steps=0,
     ):
+        self.start_time = time.time()
+        self.last_log_time = time.time()  # 用于计算局部每秒步数 (Steps Per Second)
+
         self.model = model
         self.diffusion = diffusion
         self.sample_diffusion = sample_diffusion
@@ -187,6 +192,7 @@ class TrainLoop:
         ):
             M_o, M_r, P_i, cond, _ = next(self.data)                    # 从数据生成器中获取一个批次的训练数据和对应的条件信息（如果有的话）
             self.run_step(M_o, M_r, P_i, cond)                          # 执行一个训练步骤，包括前向传播、反向传播和优化器更新
+
             if self.step % self.log_interval == 0:
                 if dist.get_rank() == 0:
                     gen_P, t_loss, f1 = self.evaluate_and_sample(use_ema=False)
@@ -211,7 +217,6 @@ class TrainLoop:
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
-            self.step += 1
 
         if (self.step - 1) % self.save_interval != 0:
             self.save()
@@ -238,7 +243,9 @@ class TrainLoop:
             
             # 3. 计算指标
             loss = loss_path_similarity(self.weight_path_similarity, self.sample_P, gen_P).mean().item()
-            f1 = compute_F1_score(self.sample_P, gen_P, self.Path_inverse)
+            gen_P_filtered = sample_filter(gen_P, self.Path_inverse, threshold_255=100)
+
+            f1 = compute_F1_score(self.sample_P, gen_P_filtered, self.Path_inverse, thresh_hold=0)
             
             # 记录到日志系统
             suffix = "(EMA)" if use_ema else ""
@@ -361,11 +368,12 @@ class TrainLoop:
 
     def run_step(self, M_o, M_r, P_i, cond):
         self.forward_backward(M_o, M_r, P_i, cond)
+        self.step += 1
         if self.use_fp16:
             self.optimize_fp16()
         else:
             self.optimize_normal()
-        self.log_step()
+        if self.step % self.log_interval == 0: self.log_step()
 
     def forward_backward(self, M_o, M_r, P_i, cond):
         zero_grad(self.model_params)
@@ -418,8 +426,15 @@ class TrainLoop:
             return
 
         model_grads_to_master_grads(self.model_params, self.master_params)
-        self.master_params[0].grad.mul_(1.0 / (2 ** self.lg_loss_scale))
-        self._log_grad_norm()
+
+        # self.master_params[0].grad.mul_(1.0 / (2 ** self.lg_loss_scale))
+        # 3. 核心修复：必须缩放所有主参数的梯度
+        scaling_factor = 1.0 / (2 ** self.lg_loss_scale)
+        for p in self.master_params:
+            if p.grad is not None:
+                p.grad.mul_(scaling_factor)
+
+        if self.step % self.log_interval == 0: self._log_grad_norm()
         self._anneal_lr()
         self.opt.step()
         for rate, params in zip(self.ema_rate, self.ema_params):
@@ -428,7 +443,7 @@ class TrainLoop:
         self.lg_loss_scale += self.fp16_scale_growth
 
     def optimize_normal(self):
-        self._log_grad_norm()
+        if self.step % self.log_interval == 0: self._log_grad_norm()
         self._anneal_lr()
         self.opt.step()
         for rate, params in zip(self.ema_rate, self.ema_params):
@@ -453,9 +468,22 @@ class TrainLoop:
 
     def log_step(self):
         logger.logkv("step", self.step + self.resume_step)
-        logger.logkv("samples", (self.step + self.resume_step + 1) * self.global_batch)
+        logger.logkv("samples", (self.step + self.resume_step) * self.global_batch)
         if self.use_fp16:
             logger.logkv("lg_loss_scale", self.lg_loss_scale)
+
+        # 总耗时 (Total Elapsed Time)
+        elapsed_total = time.time() - self.start_time
+        
+        # 计算当前 log 间隔内的吞吐量 (Throughput)
+        current_time = time.time()
+        dt = current_time - self.last_log_time
+        sps = self.log_interval / dt if dt > 0 else 0   # steps_per_sec：每秒步数，简称 SPS）是衡量深度学习训练吞吐量（Throughput）和工程效率的核心指标
+        self.last_log_time = current_time
+
+        # 写入 logger
+        logger.logkv("time_elapsed_seconds", elapsed_total)
+        logger.logkv("steps_per_sec", sps)
 
     def save(self):
         def save_checkpoint(rate, params):
