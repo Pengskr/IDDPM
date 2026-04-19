@@ -325,3 +325,37 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError("boolean value expected")
+
+import torch as th
+
+def sample_filter(sample, Path_inverse=False, threshold_255=50):
+    """
+    专门用于将扩散模型输出映射到 [0, 255] 过滤噪声，并还原回 [-1, 1]
+    
+    Args:
+        sample (torch.Tensor): 扩散模型的原始输出, 理论范围 [-1, 1]
+        Path_inverse (bool): 
+            True:  0 是路径, 255 是背景 (噪声是靠近 0 的浅色点)
+            False: 255 是路径, 0 是背景 (噪声是靠近 0 的深色点)
+        threshold_255 (int): 过滤阈值 [0, 255]
+        
+    Returns:
+        torch.Tensor: 过滤后的张量, 范围 [-1, 1]
+    """
+    # 映射到 [0, 255]
+    sample_255 = ((sample + 1) * 127.5).clamp(0, 255)
+
+    if Path_inverse:
+        # 路径是 0。判定范围: [0, threshold_255]
+        # 只要足够“黑”，就是路径
+        sample_bin = th.where(sample_255 < threshold_255, 0.0, 255.0)
+    else:
+        # 路径是 255。判定范围: [255 - threshold_255, 255]
+        # 只要足够“白”，就是路径
+        sample_bin = th.where(sample_255 > (255 - threshold_255), 255.0, 0.0)
+        
+    # 还原到 [-1, 1]
+    # 公式: x_norm = (x_255 / 127.5) - 1
+    sample_filtered = (sample_bin / 127.5) - 1.0
+    
+    return sample_filtered
