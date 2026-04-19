@@ -16,7 +16,7 @@ import torch as th
 import matplotlib.pyplot as plt
 
 from .nn import mean_flat
-from .losses import normal_kl, discretized_gaussian_log_likelihood
+from .losses import normal_kl, discretized_gaussian_log_likelihood, loss_path_similarity
 
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
@@ -267,7 +267,7 @@ class GaussianDiffusion:
         B, C = x.shape[:2]
         assert t.shape == (B,)
         M_r = model_kwargs.pop('M_r', None)
-        model_output = model(x, self._scale_timesteps(t), M_r=M_r,**model_kwargs)
+        model_output = self._run_model(model, x, self._scale_timesteps(t), M_r, model_kwargs)
 
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, C * 2, *x.shape[2:])
@@ -334,6 +334,12 @@ class GaussianDiffusion:
             "log_variance": model_log_variance,
             "pred_xstart": pred_xstart,
         }
+
+    def _run_model(self, model, x, t, M_r, model_kwargs):
+        """
+        默认的模型调用方式：特征注入 (MFF+MCA范式)
+        """
+        return model(x, t, M_r=M_r, **model_kwargs)
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
         assert x_t.shape == eps.shape
@@ -733,7 +739,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), M_r=M_r, **model_kwargs) # 神经网络预测：Unet的输出，可能是噪声epsilon或x_0和可学习方差(learn_sigma=True)
+            model_output = self._run_model(model, x_t, self._scale_timesteps(t), M_r, model_kwargs)  # 神经网络预测：Unet的输出，可能是噪声epsilon或x_0和可学习方差(learn_sigma=True)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
@@ -767,7 +773,7 @@ class GaussianDiffusion:
             assert model_output.shape == target.shape == x_start.shape
 
             pred_xstart = self._predict_xstart_from_eps(x_t=x_t, t=t, eps=model_output)
-            terms['Path_simi_loss'] = self.loss_path_similarity(x_start, pred_xstart)
+            terms['Path_simi_loss'] = loss_path_similarity(self.weight_path_similarity, x_start, pred_xstart)
             
             terms["mse"] = mean_flat((target - model_output) ** 2) + terms['Path_simi_loss']  # 模型预测目标（通常是噪声 $\epsilon$）与真实目标之间的均方误差，这是扩散模型最核心的训练目标（考虑路径相似度损失）
             
@@ -779,38 +785,6 @@ class GaussianDiffusion:
             raise NotImplementedError(self.loss_type)
 
         return terms
-
-    def loss_path_similarity(self, x_start, pred_xstart):
-        return self.weight_path_similarity * mean_flat((x_start - pred_xstart) ** 2)
-
-    def compute_F1_score(self, P, gen_P, Path_inverse=False):
-        """
-        Args:
-            path_inverse (bool): 如果为 True, 则 -1 是路径；如果为 False, 则 1 是路径。
-        """
-        # 动态确定路径点的判定条件
-        if Path_inverse:
-            # -1 是路径点，我们将其判定为 1 (Positive)
-            target = (P < 0).float()
-            pred = (gen_P < 0).float()
-        else:
-            # 1 是路径点
-            target = (P > 0).float()
-            pred = (gen_P > 0).float()
-
-        # 后续计算 TP, FP, FN 的逻辑保持不变...
-        target = target.view(target.size(0), -1)
-        pred = pred.view(pred.size(0), -1)
-        
-        tp = (target * pred).sum(dim=1)
-        fp = ((1 - target) * pred).sum(dim=1)
-        fn = (target * (1 - pred)).sum(dim=1)
-
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
-
-        return f1.mean().item()
 
     def _prior_bpd(self, x_start):
         """
@@ -927,3 +901,19 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape)
+
+
+class GaussianDiffusion_without_MFF_MCA(GaussianDiffusion):
+    """
+    不使用 MFF/MCA 模块，而是将 M_r 拼接到输入通道中 (Concat 范式)
+    """
+    def _run_model(self, model, x, t, M_r, model_kwargs):
+        if M_r is None:
+            raise ValueError("M_r is required for concatenated conditioning.")
+        
+        # 核心区别：将 x 和 M_r 在通道维度拼接
+        # x shape: [B, 1, H, W], M_r shape: [B, 3, H, W] -> [B, 4, H, W]
+        model_input = th.cat([x, M_r.type(x.dtype)], dim=1)
+        
+        # 调用模型时不再传入 M_r 参数，因为已经拼进去了
+        return model(model_input, t, **model_kwargs)
